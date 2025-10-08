@@ -21,11 +21,13 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   List<String> _detectionResults = [];
   List<String> _systemMessages = [];
   SimpleImageData? _currentImageData;
-  SimpleImageData? _previousImageData;
+  Uint8List? _currentImageBytes;
+  Uint8List? _previousImageBytes;
   bool _isConnected = false;
   bool _showBrakeWarning = false;
   String _warningMessage = '';
-  double _cameraStreamHeight = 300; // Default height
+  double _cameraStreamHeight = 280; // Default height
+  bool _useCurrentBuffer = true;
 
   late StreamSubscription<SimpleImageData> _imageSubscription;
   late StreamSubscription<DetectionResult> _detectionSubscription;
@@ -61,11 +63,24 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
 
   void _setupImageListener() {
     _imageSubscription = _cameraService.imageStream.listen((imageData) {
-      if (mounted) {
-        setState(() {
-          _previousImageData = _currentImageData;
-          _currentImageData = imageData;
-        });
+      if (mounted && imageData.hasImageData) {
+        try {
+          final newImageBytes = base64Decode(imageData.base64Data!);
+          setState(() {
+            // Double buffering with pre-decoded bytes
+            if (_useCurrentBuffer) {
+              _previousImageBytes = _currentImageBytes;
+              _currentImageBytes = newImageBytes;
+            } else {
+              _currentImageBytes = _previousImageBytes;
+              _previousImageBytes = newImageBytes;
+            }
+            _currentImageData = imageData;
+            _useCurrentBuffer = !_useCurrentBuffer;
+          });
+        } catch (e) {
+          print('Error decoding image: $e');
+        }
       }
     });
   }
@@ -149,14 +164,35 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
             padding: const EdgeInsets.all(16.0),
             child: Column(
               children: [
-                _buildCameraStreamCard(context),
-                const SizedBox(height: 16),
                 Expanded(
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(child: _buildDetectionResultsCard(context)),
+                      // Left column - Camera stream
+                      Expanded(
+                        flex: 2,
+                        child: _buildCameraStreamCard(context),
+                      ),
                       const SizedBox(width: 16),
-                      Expanded(child: _buildSystemMessagesCard(context)),
+                      // Right column - Controls and messages
+                      Expanded(
+                        flex: 3,
+                        child: Column(
+                          children: [
+                            _buildStreamControlCard(context),
+                            const SizedBox(height: 16),
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  Expanded(child: _buildDetectionResultsCard(context)),
+                                  const SizedBox(width: 16),
+                                  Expanded(child: _buildSystemMessagesCard(context)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -182,53 +218,108 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
-            Column(
-              children: [
-                Row(
-                  children: [
-                    Text('Stream Size: ', style: Theme.of(context).textTheme.bodySmall),
-                    Expanded(
-                      child: Slider(
-                        value: _cameraStreamHeight,
-                        min: 200,
-                        max: 600,
-                        divisions: 8,
-                        label: '${_cameraStreamHeight.round()}px',
-                        onChanged: (value) {
-                          setState(() {
-                            _cameraStreamHeight = value;
-                          });
-                        },
-                      ),
-                    ),
-                    Text('${_cameraStreamHeight.round()}px',
-                         style: Theme.of(context).textTheme.bodySmall),
-                  ],
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                const SizedBox(height: 8),
-                Container(
-                  height: _cameraStreamHeight,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: _currentImageData != null
-                        ? _currentImageData!.hasImageData
-                            ? _buildSmoothImageDisplay()
-                            : _buildImageInfo()
-                        : const Center(
-                            child: Text(
-                              'No camera stream available',
-                              style: TextStyle(color: Colors.grey),
-                            ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: _currentImageBytes != null
+                      ? _buildDoubleBufferedImage()
+                      : const Center(
+                          child: Text(
+                            'No camera stream available',
+                            style: TextStyle(color: Colors.grey),
                           ),
+                        ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStreamControlCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Stream Controls',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Text('Stream Size: ', style: Theme.of(context).textTheme.bodySmall),
+                Expanded(
+                  child: Slider(
+                    value: _cameraStreamHeight,
+                    min: 200,
+                    max: 350, // Limited to 350px for 320x240 content
+                    divisions: 6,
+                    label: '${_cameraStreamHeight.round()}px',
+                    onChanged: (value) {
+                      setState(() {
+                        _cameraStreamHeight = value;
+                      });
+                    },
                   ),
                 ),
+                Text('${_cameraStreamHeight.round()}px',
+                     style: Theme.of(context).textTheme.bodySmall),
               ],
             ),
+            if (_currentImageData != null) ...
+            [
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _isConnected ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: _isConnected ? Colors.green : Colors.grey,
+                      ),
+                    ),
+                    child: Text(
+                      '${_currentImageData!.width}x${_currentImageData!.height}',
+                      style: TextStyle(
+                        color: _isConnected ? Colors.green : Colors.grey,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.blue),
+                    ),
+                    child: Text(
+                      _currentImageData!.format.toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.blue,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ]
           ],
         ),
       ),
@@ -299,100 +390,40 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     );
   }
 
-  Widget _buildSmoothImageDisplay() {
+  Widget _buildDoubleBufferedImage() {
     return Stack(
       children: [
-        // Double buffering with AnimatedSwitcher for smooth transitions
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 100),
-          transitionBuilder: (Widget child, Animation<double> animation) {
-            return FadeTransition(
-              opacity: animation,
-              child: child,
-            );
-          },
-          child: _buildImageWidget(_currentImageData),
-        ),
-        // Status overlay
-        Positioned(
-          bottom: 4,
-          left: 4,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.7),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              '${_currentImageData!.width}x${_currentImageData!.height} • ${_currentImageData!.format}',
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+        // Background buffer (previous frame)
+        if (_previousImageBytes != null)
+          Positioned.fill(
+            child: Image.memory(
+              _previousImageBytes!,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
             ),
           ),
+        // Foreground buffer (current frame) with fade transition
+        AnimatedOpacity(
+          duration: const Duration(milliseconds: 50),
+          opacity: _currentImageBytes != null ? 1.0 : 0.0,
+          child: _currentImageBytes != null
+              ? Image.memory(
+                  _currentImageBytes!,
+                  fit: BoxFit.contain,
+                  width: double.infinity,
+                  height: double.infinity,
+                  gaplessPlayback: true,
+                  filterQuality: FilterQuality.medium,
+                  errorBuilder: (context, error, stackTrace) {
+                    return const Center(
+                      child: Icon(Icons.error, color: Colors.red),
+                    );
+                  },
+                )
+              : const SizedBox(),
         ),
       ],
     );
-  }
-
-  Widget _buildImageWidget(SimpleImageData? imageData) {
-    if (imageData == null || !imageData.hasImageData) {
-      return Container(
-        key: const ValueKey('no_image'),
-        child: const Center(
-          child: Text(
-            'No image data',
-            style: TextStyle(color: Colors.grey),
-          ),
-        ),
-      );
-    }
-
-    try {
-      final imageBytes = base64Decode(imageData.base64Data!);
-      return Container(
-        key: ValueKey('image_${imageData.hashCode}'),
-        child: Image.memory(
-          imageBytes,
-          fit: BoxFit.contain,
-          width: double.infinity,
-          height: double.infinity,
-          gaplessPlayback: true, // Reduces flickering
-          errorBuilder: (context, error, stackTrace) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error, color: Colors.red),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Error displaying image: $error',
-                    style: const TextStyle(color: Colors.red, fontSize: 14),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      );
-    } catch (e) {
-      return Container(
-        key: const ValueKey('decode_error'),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.broken_image, color: Colors.orange),
-              const SizedBox(height: 8),
-              Text(
-                'Failed to decode image: $e',
-                style: const TextStyle(color: Colors.orange, fontSize: 14),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
   }
 
   Widget _buildImageInfo() {
