@@ -1,6 +1,6 @@
 # ros_flutter
 
-A new Flutter project.
+A reference ROS2 Flutter Project using [rcldart](https://github.com/rcldart/rcldart).
 
 ## Getting Started
 
