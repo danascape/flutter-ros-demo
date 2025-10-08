@@ -16,27 +16,39 @@ class _RosHomePageState extends State<RosHomePage> {
   final RosService _rosService = RosService();
   final List<String> _receivedMessages = [];
   final TextEditingController _messageController = TextEditingController();
+  final TextEditingController _publishTopicController = TextEditingController();
+  final TextEditingController _subscribeTopicController = TextEditingController();
   late StreamSubscription<String> _messageSubscription;
+  bool _isConnected = false;
 
   @override
   void initState() {
     super.initState();
+    // Set default topics
+    _publishTopicController.text = '/flutter_messages';
+    _subscribeTopicController.text = '/ros_messages';
     _initializeRos();
     _setupMessageListener();
   }
 
   void _initializeRos() async {
     try {
-      await _rosService.initialize();
+      await _rosService.initialize(
+        publishTopic: _publishTopicController.text.trim(),
+        subscribeTopic: _subscribeTopicController.text.trim(),
+      );
       if (mounted) {
         setState(() {
+          _isConnected = true;
           _receivedMessages.add("ROS node initialized successfully");
-          _receivedMessages.add("Publisher ready - you can now send messages");
+          _receivedMessages.add("Publishing to: ${_rosService.publishTopic}");
+          _receivedMessages.add("Listening on: ${_rosService.subscribeTopic}");
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
+          _isConnected = false;
           _receivedMessages.add("Error initializing ROS: $e");
         });
       }
@@ -69,10 +81,45 @@ class _RosHomePageState extends State<RosHomePage> {
     }
   }
 
+  void _updateTopics() async {
+    final publishTopic = _publishTopicController.text.trim();
+    final subscribeTopic = _subscribeTopicController.text.trim();
+
+    if (publishTopic.isEmpty || subscribeTopic.isEmpty) {
+      setState(() {
+        _receivedMessages.add("Error: Topic names cannot be empty");
+      });
+      return;
+    }
+
+    try {
+      setState(() {
+        _isConnected = false;
+        _receivedMessages.add("Updating ROS topics...");
+      });
+
+      await _rosService.updateTopics(publishTopic, subscribeTopic);
+
+      setState(() {
+        _isConnected = true;
+        _receivedMessages.add("Topics updated successfully");
+        _receivedMessages.add("Publishing to: ${_rosService.publishTopic}");
+        _receivedMessages.add("Listening on: ${_rosService.subscribeTopic}");
+      });
+    } catch (e) {
+      setState(() {
+        _isConnected = false;
+        _receivedMessages.add("Error updating topics: $e");
+      });
+    }
+  }
+
   @override
   void dispose() {
     _messageSubscription.cancel();
     _messageController.dispose();
+    _publishTopicController.dispose();
+    _subscribeTopicController.dispose();
     _rosService.dispose();
     super.dispose();
   }
@@ -88,9 +135,78 @@ class _RosHomePageState extends State<RosHomePage> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
+            _buildTopicConfigCard(context),
+            const SizedBox(height: 16),
             _buildMessageInputCard(context),
             const SizedBox(height: 16),
             _buildMessagesCard(context),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopicConfigCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'ROS Topic Configuration',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const Spacer(),
+                Icon(
+                  _isConnected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                  color: _isConnected ? Colors.green : Colors.grey,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _isConnected ? 'Connected' : 'Disconnected',
+                  style: TextStyle(
+                    color: _isConnected ? Colors.green : Colors.grey,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _publishTopicController,
+                    decoration: const InputDecoration(
+                      labelText: 'Publish Topic',
+                      border: OutlineInputBorder(),
+                      hintText: '/flutter_messages',
+                      helperText: 'Topic to publish messages to',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: TextField(
+                    controller: _subscribeTopicController,
+                    decoration: const InputDecoration(
+                      labelText: 'Subscribe Topic',
+                      border: OutlineInputBorder(),
+                      hintText: '/ros_messages',
+                      helperText: 'Topic to listen for messages',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                ElevatedButton(
+                  onPressed: _updateTopics,
+                  child: const Text('Update Topics'),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -114,15 +230,17 @@ class _RosHomePageState extends State<RosHomePage> {
                 Expanded(
                   child: TextField(
                     controller: _messageController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Message',
-                      border: OutlineInputBorder(),
+                      border: const OutlineInputBorder(),
+                      hintText: _isConnected ? 'Enter message to publish to ${_rosService.publishTopic}' : 'Connect to ROS first',
                     ),
+                    enabled: _isConnected,
                   ),
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton(
-                  onPressed: _sendMessage,
+                  onPressed: _isConnected ? _sendMessage : null,
                   child: const Text('Send'),
                 ),
               ],
@@ -142,7 +260,7 @@ class _RosHomePageState extends State<RosHomePage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'ROS Messages',
+                'ROS Messages (from ${_rosService.subscribeTopic})',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 8),

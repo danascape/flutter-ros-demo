@@ -13,23 +13,31 @@ class RosService {
   Timer? _pollingTimer;
   late StreamController<String> _messageStreamController;
 
+  String _publishTopic = '/flutter_messages';
+  String _subscribeTopic = '/ros_messages';
+
   Stream<String> get messageStream => _messageStreamController.stream;
+  String get publishTopic => _publishTopic;
+  String get subscribeTopic => _subscribeTopic;
 
   RosService() {
     _messageStreamController = StreamController<String>.broadcast();
   }
 
-  Future<void> initialize() async {
+  Future<void> initialize({String? publishTopic, String? subscribeTopic}) async {
     try {
+      if (publishTopic != null) _publishTopic = publishTopic;
+      if (subscribeTopic != null) _subscribeTopic = subscribeTopic;
+
       _node = rcldart.RclDart().createNode("flutter_ros_node", "flutter_app");
 
       _publisher = _node!.createPublisher<StdMsgsString>(
-        topic_name: "/flutter_messages",
+        topic_name: _publishTopic,
         messageType: StdMsgsString(""),
       );
 
       _subscription = _node!.createSubscriber<StdMsgsString>(
-        topic_name: "/ros_messages",
+        topic_name: _subscribeTopic,
         messageType: StdMsgsString(""),
         callback: (msg) {
           _messageStreamController.add(msg.value);
@@ -76,6 +84,20 @@ class RosService {
   }
 
   bool get isInitialized => _publisher != null && _subscription != null;
+
+  Future<void> updateTopics(String newPublishTopic, String newSubscribeTopic) async {
+    if (newPublishTopic == _publishTopic && newSubscribeTopic == _subscribeTopic) {
+      return; // No change needed
+    }
+
+    // Dispose current connections
+    _pollingTimer?.cancel();
+    _subscription = null;
+    _publisher = null;
+
+    // Reinitialize with new topics
+    await initialize(publishTopic: newPublishTopic, subscribeTopic: newSubscribeTopic);
+  }
 
   void dispose() {
     _pollingTimer?.cancel();
