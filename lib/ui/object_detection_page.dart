@@ -21,9 +21,11 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   List<String> _detectionResults = [];
   List<String> _systemMessages = [];
   SimpleImageData? _currentImageData;
+  SimpleImageData? _previousImageData;
   bool _isConnected = false;
   bool _showBrakeWarning = false;
   String _warningMessage = '';
+  double _cameraStreamHeight = 300; // Default height
 
   late StreamSubscription<SimpleImageData> _imageSubscription;
   late StreamSubscription<DetectionResult> _detectionSubscription;
@@ -61,6 +63,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     _imageSubscription = _cameraService.imageStream.listen((imageData) {
       if (mounted) {
         setState(() {
+          _previousImageData = _currentImageData;
           _currentImageData = imageData;
         });
       }
@@ -179,23 +182,52 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
-            Container(
-              height: 200,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: _currentImageData != null
-                  ? _currentImageData!.hasImageData
-                      ? _buildImageDisplay()
-                      : _buildImageInfo()
-                  : const Center(
-                      child: Text(
-                        'No camera stream available',
-                        style: TextStyle(color: Colors.grey),
+            Column(
+              children: [
+                Row(
+                  children: [
+                    Text('Stream Size: ', style: Theme.of(context).textTheme.bodySmall),
+                    Expanded(
+                      child: Slider(
+                        value: _cameraStreamHeight,
+                        min: 200,
+                        max: 600,
+                        divisions: 8,
+                        label: '${_cameraStreamHeight.round()}px',
+                        onChanged: (value) {
+                          setState(() {
+                            _cameraStreamHeight = value;
+                          });
+                        },
                       ),
                     ),
+                    Text('${_cameraStreamHeight.round()}px',
+                         style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  height: _cameraStreamHeight,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: _currentImageData != null
+                        ? _currentImageData!.hasImageData
+                            ? _buildSmoothImageDisplay()
+                            : _buildImageInfo()
+                        : const Center(
+                            child: Text(
+                              'No camera stream available',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -267,56 +299,97 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     );
   }
 
-  Widget _buildImageDisplay() {
-    try {
-      final imageBytes = base64Decode(_currentImageData!.base64Data!);
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Expanded(
-            child: Image.memory(
-              imageBytes,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.error, color: Colors.red),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Error displaying image: $error',
-                        style: const TextStyle(color: Colors.red, fontSize: 14),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                );
-              },
+  Widget _buildSmoothImageDisplay() {
+    return Stack(
+      children: [
+        // Double buffering with AnimatedSwitcher for smooth transitions
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 100),
+          transitionBuilder: (Widget child, Animation<double> animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: child,
+            );
+          },
+          child: _buildImageWidget(_currentImageData),
+        ),
+        // Status overlay
+        Positioned(
+          bottom: 4,
+          left: 4,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(4),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(4.0),
             child: Text(
               '${_currentImageData!.width}x${_currentImageData!.height} • ${_currentImageData!.format}',
-              style: const TextStyle(color: Colors.grey, fontSize: 14),
+              style: const TextStyle(color: Colors.white, fontSize: 12),
             ),
           ),
-        ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildImageWidget(SimpleImageData? imageData) {
+    if (imageData == null || !imageData.hasImageData) {
+      return Container(
+        key: const ValueKey('no_image'),
+        child: const Center(
+          child: Text(
+            'No image data',
+            style: TextStyle(color: Colors.grey),
+          ),
+        ),
+      );
+    }
+
+    try {
+      final imageBytes = base64Decode(imageData.base64Data!);
+      return Container(
+        key: ValueKey('image_${imageData.hashCode}'),
+        child: Image.memory(
+          imageBytes,
+          fit: BoxFit.contain,
+          width: double.infinity,
+          height: double.infinity,
+          gaplessPlayback: true, // Reduces flickering
+          errorBuilder: (context, error, stackTrace) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.error, color: Colors.red),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Error displaying image: $error',
+                    style: const TextStyle(color: Colors.red, fontSize: 14),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       );
     } catch (e) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.broken_image, color: Colors.orange),
-            const SizedBox(height: 8),
-            Text(
-              'Failed to decode image: $e',
-              style: const TextStyle(color: Colors.orange, fontSize: 14),
-              textAlign: TextAlign.center,
-            ),
-          ],
+      return Container(
+        key: const ValueKey('decode_error'),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.broken_image, color: Colors.orange),
+              const SizedBox(height: 8),
+              Text(
+                'Failed to decode image: $e',
+                style: const TextStyle(color: Colors.orange, fontSize: 14),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       );
     }
