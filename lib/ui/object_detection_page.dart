@@ -21,13 +21,14 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   List<String> _detectionResults = [];
   List<String> _systemMessages = [];
   SimpleImageData? _currentImageData;
-  Uint8List? _currentImageBytes;
-  Uint8List? _previousImageBytes;
+  MemoryImage? _currentMemoryImage;
+  MemoryImage? _previousMemoryImage;
   bool _isConnected = false;
   bool _showBrakeWarning = false;
   String _warningMessage = '';
   double _cameraStreamHeight = 280; // Default height
-  bool _useCurrentBuffer = true;
+  int _frameCounter = 0;
+  DateTime _lastFrameTime = DateTime.now();
 
   late StreamSubscription<SimpleImageData> _imageSubscription;
   late StreamSubscription<DetectionResult> _detectionSubscription;
@@ -64,22 +65,27 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   void _setupImageListener() {
     _imageSubscription = _cameraService.imageStream.listen((imageData) {
       if (mounted && imageData.hasImageData) {
+        // Throttle frame updates to reduce blinking
+        final now = DateTime.now();
+        if (now.difference(_lastFrameTime).inMilliseconds < 100) {
+          return; // Skip frame if too soon
+        }
+        _lastFrameTime = now;
+
         try {
           final newImageBytes = base64Decode(imageData.base64Data!);
+          final newMemoryImage = MemoryImage(newImageBytes);
+
+          // Only update if we have a different frame
+          _frameCounter++;
+
           setState(() {
-            // Double buffering with pre-decoded bytes
-            if (_useCurrentBuffer) {
-              _previousImageBytes = _currentImageBytes;
-              _currentImageBytes = newImageBytes;
-            } else {
-              _currentImageBytes = _previousImageBytes;
-              _previousImageBytes = newImageBytes;
-            }
+            _previousMemoryImage = _currentMemoryImage;
+            _currentMemoryImage = newMemoryImage;
             _currentImageData = imageData;
-            _useCurrentBuffer = !_useCurrentBuffer;
           });
         } catch (e) {
-          print('Error decoding image: $e');
+          print('Error processing image: $e');
         }
       }
     });
@@ -227,14 +233,16 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: _currentImageBytes != null
-                      ? _buildDoubleBufferedImage()
-                      : const Center(
-                          child: Text(
-                            'No camera stream available',
-                            style: TextStyle(color: Colors.grey),
+                  child: RepaintBoundary(
+                    child: _currentMemoryImage != null
+                        ? _buildStableImageDisplay()
+                        : const Center(
+                            child: Text(
+                              'No camera stream available',
+                              style: TextStyle(color: Colors.grey),
+                            ),
                           ),
-                        ),
+                  ),
                 ),
               ),
             ),
@@ -390,39 +398,48 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     );
   }
 
-  Widget _buildDoubleBufferedImage() {
-    return Stack(
-      children: [
-        // Background buffer (previous frame)
-        if (_previousImageBytes != null)
-          Positioned.fill(
-            child: Image.memory(
-              _previousImageBytes!,
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
-            ),
-          ),
-        // Foreground buffer (current frame) with fade transition
-        AnimatedOpacity(
-          duration: const Duration(milliseconds: 50),
-          opacity: _currentImageBytes != null ? 1.0 : 0.0,
-          child: _currentImageBytes != null
-              ? Image.memory(
-                  _currentImageBytes!,
+  Widget _buildStableImageDisplay() {
+    return Container(
+      key: ValueKey('stable_image_$_frameCounter'),
+      child: Image(
+        image: _currentMemoryImage!,
+        fit: BoxFit.contain,
+        width: double.infinity,
+        height: double.infinity,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          // Only show the image when it's fully loaded
+          if (wasSynchronouslyLoaded || frame != null) {
+            return child;
+          }
+          // Show previous image while loading new one
+          return _previousMemoryImage != null
+              ? Image(
+                  image: _previousMemoryImage!,
                   fit: BoxFit.contain,
                   width: double.infinity,
                   height: double.infinity,
                   gaplessPlayback: true,
-                  filterQuality: FilterQuality.medium,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Center(
-                      child: Icon(Icons.error, color: Colors.red),
-                    );
-                  },
                 )
-              : const SizedBox(),
-        ),
-      ],
+              : const Center(
+                  child: CircularProgressIndicator(),
+                );
+        },
+        errorBuilder: (context, error, stackTrace) {
+          print('Image display error: $error');
+          return const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.error, color: Colors.red),
+                SizedBox(height: 8),
+                Text('Image error', style: TextStyle(color: Colors.red)),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
