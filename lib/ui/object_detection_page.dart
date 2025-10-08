@@ -37,6 +37,9 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   late StreamSubscription<SimpleImageData> _imageSubscription;
   late StreamSubscription<DetectionResult> _detectionSubscription;
 
+  final ScrollController _detectionScrollController = ScrollController();
+  final ScrollController _systemMessagesScrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -56,12 +59,14 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
           _isConnected = true;
           _systemMessages.add("Camera and detection services initialized");
         });
+        _scrollSystemMessagesToBottom();
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _systemMessages.add("Error initializing services: $e");
         });
+        _scrollSystemMessagesToBottom();
       }
     }
   }
@@ -113,6 +118,8 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
             _systemMessages.removeAt(0);
           }
         });
+        _scrollDetectionToBottom();
+        _scrollSystemMessagesToBottom();
       }
     });
   }
@@ -149,6 +156,8 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   void dispose() {
     _imageSubscription.cancel();
     _detectionSubscription.cancel();
+    _detectionScrollController.dispose();
+    _systemMessagesScrollController.dispose();
     _cameraService.dispose();
     _detectionService.dispose();
     super.dispose();
@@ -413,6 +422,30 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     );
   }
 
+  void _scrollDetectionToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_detectionScrollController.hasClients) {
+        _detectionScrollController.animateTo(
+          _detectionScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _scrollSystemMessagesToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_systemMessagesScrollController.hasClients) {
+        _systemMessagesScrollController.animateTo(
+          _systemMessagesScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
   void _onCameraModelChanged(CameraModel model) {
     print('Camera model changed to: ${model.name}');
 
@@ -422,6 +455,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
         _systemMessages.removeAt(0);
       }
     });
+    _scrollSystemMessagesToBottom();
 
     // TODO: Implement model switching
   }
@@ -440,6 +474,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
             const SizedBox(height: 8),
             Expanded(
               child: ListView.builder(
+                controller: _detectionScrollController,
                 itemCount: _detectionResults.length,
                 itemBuilder: (context, index) {
                   return Padding(
@@ -472,6 +507,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
             const SizedBox(height: 8),
             Expanded(
               child: ListView.builder(
+                controller: _systemMessagesScrollController,
                 itemCount: _systemMessages.length,
                 itemBuilder: (context, index) {
                   return Padding(
