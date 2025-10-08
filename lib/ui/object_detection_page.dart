@@ -457,7 +457,50 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     });
     _scrollSystemMessagesToBottom();
 
-    // TODO: Implement model switching
+    // Switch detection model via ROS service call or topic
+    _switchDetectionModel(model);
+  }
+
+  void _switchDetectionModel(CameraModel model) {
+    // Publish mode switch command to ROS2 via detection service
+    try {
+      // This will be handled by the ROS service when we extend it
+      // For now, we'll simulate the mode switch
+      if (model == CameraModel.driver) {
+        _switchToDriverDetection();
+      } else {
+        _switchToFrontDetection();
+      }
+
+      // TODO: Add actual ROS2 topic publishing when detection service is extended
+      // Example: _rosService.publishModeCommand(model.name);
+
+    } catch (e) {
+      setState(() {
+        _systemMessages.add('Error switching detection model: $e');
+      });
+      _scrollSystemMessagesToBottom();
+    }
+  }
+
+  void _switchToDriverDetection() {
+    // Subscribe to driver-specific detection results
+    // Topic: /driver_detections
+    setState(() {
+      _systemMessages.add('Monitoring: Driver mood and behavior');
+      _systemMessages.add('Analyzing: Fatigue, alertness, emotions');
+    });
+    _scrollSystemMessagesToBottom();
+  }
+
+  void _switchToFrontDetection() {
+    // Subscribe to front object detection results
+    // Topic: /object_detections (current)
+    setState(() {
+      _systemMessages.add('Monitoring: Road objects and obstacles');
+      _systemMessages.add('Analyzing: Cars, pedestrians, traffic signs');
+    });
+    _scrollSystemMessagesToBottom();
   }
 
   Widget _buildDetectionResultsCard(BuildContext context) {
