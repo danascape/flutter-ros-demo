@@ -7,6 +7,8 @@ import '../core/object_detection_service.dart';
 import '../utils/detection_utils.dart';
 import '../utils/simple_messages.dart';
 
+enum CameraModel { driver, front }
+
 class ObjectDetectionPage extends StatefulWidget {
   const ObjectDetectionPage({super.key});
 
@@ -26,9 +28,11 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   bool _isConnected = false;
   bool _showBrakeWarning = false;
   String _warningMessage = '';
-  double _cameraStreamHeight = 280; // Default height
   int _frameCounter = 0;
   DateTime _lastFrameTime = DateTime.now();
+
+  // Camera detection model selection
+  CameraModel _selectedCameraModel = CameraModel.driver;
 
   late StreamSubscription<SimpleImageData> _imageSubscription;
   late StreamSubscription<DetectionResult> _detectionSubscription;
@@ -260,29 +264,88 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Stream Controls',
+              'Detection Model',
               style: Theme.of(context).textTheme.titleMedium,
             ),
+            const SizedBox(height: 12),
+            Column(
+              children: [
+                RadioListTile<CameraModel>(
+                  title: Row(
+                    children: [
+                      Icon(
+                        Icons.person,
+                        color: _selectedCameraModel == CameraModel.driver
+                            ? Theme.of(context).primaryColor
+                            : Colors.grey,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      const Text('Driver Detection'),
+                    ],
+                  ),
+                  subtitle: const Text('Monitor driver behavior and alertness'),
+                  value: CameraModel.driver,
+                  groupValue: _selectedCameraModel,
+                  activeColor: Theme.of(context).primaryColor,
+                  onChanged: (CameraModel? value) {
+                    setState(() {
+                      _selectedCameraModel = value!;
+                    });
+                    _onCameraModelChanged(value!);
+                  },
+                ),
+                RadioListTile<CameraModel>(
+                  title: Row(
+                    children: [
+                      Icon(
+                        Icons.camera_front,
+                        color: _selectedCameraModel == CameraModel.front
+                            ? Theme.of(context).primaryColor
+                            : Colors.grey,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      const Text('Front Detection'),
+                    ],
+                  ),
+                  subtitle: const Text('Road safety and object detection'),
+                  value: CameraModel.front,
+                  groupValue: _selectedCameraModel,
+                  activeColor: Theme.of(context).primaryColor,
+                  onChanged: (CameraModel? value) {
+                    setState(() {
+                      _selectedCameraModel = value!;
+                    });
+                    _onCameraModelChanged(value!);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Divider(color: Colors.grey.withOpacity(0.3)),
             const SizedBox(height: 8),
             Row(
               children: [
-                Text('Stream Size: ', style: Theme.of(context).textTheme.bodySmall),
-                Expanded(
-                  child: Slider(
-                    value: _cameraStreamHeight,
-                    min: 200,
-                    max: 350, // Limited to 350px for 320x240 content
-                    divisions: 6,
-                    label: '${_cameraStreamHeight.round()}px',
-                    onChanged: (value) {
-                      setState(() {
-                        _cameraStreamHeight = value;
-                      });
-                    },
+                Text(
+                  'Stream Status:',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  _isConnected ? Icons.circle : Icons.circle_outlined,
+                  color: _isConnected ? Colors.green : Colors.red,
+                  size: 16,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _isConnected ? 'Connected' : 'Disconnected',
+                  style: TextStyle(
+                    color: _isConnected ? Colors.green : Colors.red,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                Text('${_cameraStreamHeight.round()}px',
-                     style: Theme.of(context).textTheme.bodySmall),
               ],
             ),
             if (_currentImageData != null) ...
@@ -293,16 +356,14 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: _isConnected ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                      color: Colors.green.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(4),
-                      border: Border.all(
-                        color: _isConnected ? Colors.green : Colors.grey,
-                      ),
+                      border: Border.all(color: Colors.green),
                     ),
                     child: Text(
                       '${_currentImageData!.width}x${_currentImageData!.height}',
-                      style: TextStyle(
-                        color: _isConnected ? Colors.green : Colors.grey,
+                      style: const TextStyle(
+                        color: Colors.green,
                         fontSize: 12,
                         fontFamily: 'monospace',
                       ),
@@ -325,6 +386,24 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                       ),
                     ),
                   ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.orange),
+                    ),
+                    child: Text(
+                      _selectedCameraModel == CameraModel.driver ? 'DRIVER' : 'FRONT',
+                      style: const TextStyle(
+                        color: Colors.orange,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ]
@@ -332,6 +411,19 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
         ),
       ),
     );
+  }
+
+  void _onCameraModelChanged(CameraModel model) {
+    print('Camera model changed to: ${model.name}');
+
+    setState(() {
+      _systemMessages.add('Detection model switched to: ${model.name.toUpperCase()}');
+      if (_systemMessages.length > 20) {
+        _systemMessages.removeAt(0);
+      }
+    });
+
+    // TODO: Implement model switching
   }
 
   Widget _buildDetectionResultsCard(BuildContext context) {
