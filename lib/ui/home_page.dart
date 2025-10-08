@@ -18,6 +18,7 @@ class _RosHomePageState extends State<RosHomePage> {
   final TextEditingController _messageController = TextEditingController();
   final TextEditingController _publishTopicController = TextEditingController();
   final TextEditingController _subscribeTopicController = TextEditingController();
+  final ScrollController _messagesScrollController = ScrollController();
   late StreamSubscription<String> _messageSubscription;
   bool _isConnected = false;
 
@@ -44,6 +45,7 @@ class _RosHomePageState extends State<RosHomePage> {
           _receivedMessages.add("Publishing to: ${_rosService.publishTopic}");
           _receivedMessages.add("Listening on: ${_rosService.subscribeTopic}");
         });
+        _scrollToBottom();
       }
     } catch (e) {
       if (mounted) {
@@ -51,6 +53,7 @@ class _RosHomePageState extends State<RosHomePage> {
           _isConnected = false;
           _receivedMessages.add("Error initializing ROS: $e");
         });
+        _scrollToBottom();
       }
     }
   }
@@ -61,6 +64,19 @@ class _RosHomePageState extends State<RosHomePage> {
         setState(() {
           _receivedMessages.add(MessageUtils.formatReceivedMessage(message));
         });
+        _scrollToBottom();
+      }
+    });
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_messagesScrollController.hasClients) {
+        _messagesScrollController.animateTo(
+          _messagesScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
       }
     });
   }
@@ -74,10 +90,12 @@ class _RosHomePageState extends State<RosHomePage> {
         _receivedMessages.add(MessageUtils.formatSentMessage(messageText));
       });
       _messageController.clear();
+      _scrollToBottom();
     } catch (e) {
       setState(() {
         _receivedMessages.add("Error: ${e.toString().replaceFirst('RosPublishException: ', '')}");
       });
+      _scrollToBottom();
     }
   }
 
@@ -97,6 +115,7 @@ class _RosHomePageState extends State<RosHomePage> {
         _isConnected = false;
         _receivedMessages.add("Updating ROS topics...");
       });
+      _scrollToBottom();
 
       await _rosService.updateTopics(publishTopic, subscribeTopic);
 
@@ -106,11 +125,13 @@ class _RosHomePageState extends State<RosHomePage> {
         _receivedMessages.add("Publishing to: ${_rosService.publishTopic}");
         _receivedMessages.add("Listening on: ${_rosService.subscribeTopic}");
       });
+      _scrollToBottom();
     } catch (e) {
       setState(() {
         _isConnected = false;
         _receivedMessages.add("Error updating topics: $e");
       });
+      _scrollToBottom();
     }
   }
 
@@ -120,6 +141,7 @@ class _RosHomePageState extends State<RosHomePage> {
     _messageController.dispose();
     _publishTopicController.dispose();
     _subscribeTopicController.dispose();
+    _messagesScrollController.dispose();
     _rosService.dispose();
     super.dispose();
   }
@@ -266,6 +288,7 @@ class _RosHomePageState extends State<RosHomePage> {
               const SizedBox(height: 8),
               Expanded(
                 child: ListView.builder(
+                  controller: _messagesScrollController,
                   itemCount: _receivedMessages.length,
                   itemBuilder: (context, index) {
                     return Padding(
