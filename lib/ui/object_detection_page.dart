@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import '../core/camera_service.dart';
 import '../core/object_detection_service.dart';
+import '../core/detection_mode_service.dart';
 import '../utils/detection_utils.dart';
 import '../utils/simple_messages.dart';
 
@@ -19,6 +20,7 @@ class ObjectDetectionPage extends StatefulWidget {
 class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   final CameraService _cameraService = CameraService();
   final ObjectDetectionService _detectionService = ObjectDetectionService();
+  final DetectionModeService _modeService = DetectionModeService();
 
   List<String> _detectionResults = [];
   List<String> _systemMessages = [];
@@ -28,14 +30,21 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   bool _isConnected = false;
   bool _showBrakeWarning = false;
   String _warningMessage = '';
+  String _warningSource = '';
   int _frameCounter = 0;
   DateTime _lastFrameTime = DateTime.now();
 
   // Camera detection model selection
   CameraModel _selectedCameraModel = CameraModel.driver;
 
+  // Driver mood data
+  DriverDetection? _currentDriverMood;
+  String _driverMoodDisplay = 'No data';
+
   late StreamSubscription<SimpleImageData> _imageSubscription;
   late StreamSubscription<DetectionResult> _detectionSubscription;
+  late StreamSubscription<DriverDetection> _driverDetectionSubscription;
+  late StreamSubscription<SafetyAlert> _safetyAlertSubscription;
 
   final ScrollController _detectionScrollController = ScrollController();
   final ScrollController _systemMessagesScrollController = ScrollController();
@@ -50,14 +59,21 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     try {
       await _cameraService.initialize();
       await _detectionService.initialize();
+      await _modeService.initialize();
 
       _setupImageListener();
       _setupDetectionListener();
+      _setupDriverDetectionListener();
+      _setupSafetyAlertListener();
+
+      // Set initial mode to driver (person detection)
+      await _modeService.switchMode(DetectionMode.driver);
 
       if (mounted) {
         setState(() {
           _isConnected = true;
           _systemMessages.add("Camera and detection services initialized");
+          _systemMessages.add("Mode: Driver Detection - Person Detection (default)");
         });
         _scrollSystemMessagesToBottom();
       }
@@ -106,9 +122,8 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
       if (mounted) {
         setState(() {
           _detectionResults.add(DetectionUtils.formatDetectionResult(result));
-          _systemMessages.add("Detection received: ${result.className}");
 
-          // Check for brake warning conditions
+          // Check for brake warning conditions (front detection)
           _checkBrakeWarning(result);
 
           if (_detectionResults.length > 50) {
@@ -124,10 +139,74 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     });
   }
 
+  void _setupDriverDetectionListener() {
+    _driverDetectionSubscription = _detectionService.driverDetectionStream.listen((driverDetection) {
+      print("UI received driver detection: ${driverDetection.dominantEmotion} (${driverDetection.safetyStatus})");
+      if (mounted) {
+        setState(() {
+          _currentDriverMood = driverDetection;
+          _driverMoodDisplay = '${driverDetection.emotionEmoji} ${driverDetection.dominantEmotion} '
+              '(${(driverDetection.confidence * 100).toStringAsFixed(0)}%) - '
+              '${driverDetection.statusEmoji} ${driverDetection.safetyStatus.toUpperCase()}';
+
+          _detectionResults.add(
+            '${driverDetection.emotionEmoji} ${driverDetection.dominantEmotion} | '
+            'Alertness: ${driverDetection.alertnessLevel} | '
+            'Fatigue: ${driverDetection.fatigueLevel} | '
+            '${driverDetection.statusEmoji} ${driverDetection.safetyStatus}'
+          );
+
+          // Check for brake warning if driver is sleepy/fatigued
+          _checkDriverBrakeWarning(driverDetection);
+
+          if (_detectionResults.length > 50) {
+            _detectionResults.removeAt(0);
+          }
+        });
+        _scrollDetectionToBottom();
+      }
+    });
+  }
+
+  void _setupSafetyAlertListener() {
+    _safetyAlertSubscription = _detectionService.safetyAlertStream.listen((alert) {
+      print("UI received safety alert: ${alert.level} - ${alert.message}");
+      if (mounted) {
+        setState(() {
+          _systemMessages.add('${alert.level.toUpperCase()}: ${alert.message}');
+
+          // Show brake warning for critical alerts
+          if (alert.isCritical) {
+            _showBrakeWarning = true;
+            _warningMessage = alert.message;
+            _warningSource = 'driver';
+
+            // Auto-hide warning after 5 seconds for safety alerts
+            Future.delayed(Duration(seconds: 5), () {
+              if (mounted) {
+                setState(() {
+                  _showBrakeWarning = false;
+                });
+              }
+            });
+          }
+
+          if (_systemMessages.length > 20) {
+            _systemMessages.removeAt(0);
+          }
+        });
+        _scrollSystemMessagesToBottom();
+      }
+    });
+  }
+
   void _checkBrakeWarning(DetectionResult result) {
     if (result.isCritical) {
-      _showBrakeWarning = true;
-      _warningMessage = '🚨 BRAKE! ${result.className.toUpperCase()} AT ${result.distance ?? 'CLOSE RANGE'}';
+      setState(() {
+        _showBrakeWarning = true;
+        _warningMessage = '🚨 BRAKE! ${result.className.toUpperCase()} AT ${result.distance ?? 'CLOSE RANGE'}';
+        _warningSource = 'front';
+      });
 
       // Auto-hide warning after 3 seconds
       Future.delayed(Duration(seconds: 3), () {
@@ -139,10 +218,36 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
       });
     } else if (result.isWarning) {
       // Brief warning flash
-      _showBrakeWarning = true;
-      _warningMessage = '⚠️ CAUTION: ${result.className} at ${result.distance ?? 'near'}';
+      setState(() {
+        _showBrakeWarning = true;
+        _warningMessage = '⚠️ CAUTION: ${result.className} at ${result.distance ?? 'near'}';
+        _warningSource = 'front';
+      });
 
       Future.delayed(Duration(milliseconds: 1500), () {
+        if (mounted) {
+          setState(() {
+            _showBrakeWarning = false;
+          });
+        }
+      });
+    }
+  }
+
+  void _checkDriverBrakeWarning(DriverDetection driverDetection) {
+    // Issue brake warning if person is sleepy or critically fatigued
+    if (driverDetection.needsBrakeWarning) {
+      setState(() {
+        _showBrakeWarning = true;
+        _warningMessage = '🚨 BRAKE WARNING: PERSON SLEEPY/FATIGUED!\n'
+            'Emotion: ${driverDetection.emotionEmoji} ${driverDetection.dominantEmotion}\n'
+            'Fatigue: ${driverDetection.fatigueLevel.toUpperCase()}\n'
+            'PULL OVER IMMEDIATELY!';
+        _warningSource = 'mood';
+      });
+
+      // Keep warning visible longer for fatigue detection
+      Future.delayed(Duration(seconds: 5), () {
         if (mounted) {
           setState(() {
             _showBrakeWarning = false;
@@ -156,10 +261,13 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   void dispose() {
     _imageSubscription.cancel();
     _detectionSubscription.cancel();
+    _driverDetectionSubscription.cancel();
+    _safetyAlertSubscription.cancel();
     _detectionScrollController.dispose();
     _systemMessagesScrollController.dispose();
     _cameraService.dispose();
     _detectionService.dispose();
+    _modeService.dispose();
     super.dispose();
   }
 
@@ -200,6 +308,11 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                           children: [
                             _buildStreamControlCard(context),
                             const SizedBox(height: 16),
+                            // Driver mood display (only show when in FRONT mode - swapped)
+                            if (_selectedCameraModel == CameraModel.front)
+                              _buildDriverMoodCard(context),
+                            if (_selectedCameraModel == CameraModel.front)
+                              const SizedBox(height: 16),
                             Expanded(
                               child: Row(
                                 children: [
@@ -265,6 +378,166 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     );
   }
 
+  Widget _buildDriverMoodCard(BuildContext context) {
+    final driver = _currentDriverMood;
+    Color statusColor;
+
+    if (driver == null) {
+      statusColor = Colors.grey;
+    } else if (driver.safetyStatus == 'critical') {
+      statusColor = Colors.red;
+    } else if (driver.safetyStatus == 'warning') {
+      statusColor = Colors.orange;
+    } else if (driver.safetyStatus == 'caution') {
+      statusColor = Colors.yellow.shade700;
+    } else {
+      statusColor = Colors.green;
+    }
+
+    return Card(
+      color: statusColor.withOpacity(0.1),
+      elevation: 4,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.person, color: statusColor, size: 24),
+                const SizedBox(width: 8),
+                Text(
+                  'Mood Monitor (Front Detection)',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (driver == null)
+              Text(
+                'Waiting for mood detection data...',
+                style: TextStyle(color: Colors.grey, fontSize: 14),
+              )
+            else
+              Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildMoodMetric(
+                        context,
+                        'Emotion',
+                        '${driver.emotionEmoji} ${driver.dominantEmotion}',
+                        '${(driver.confidence * 100).toStringAsFixed(0)}%',
+                        Colors.blue,
+                      ),
+                      _buildMoodMetric(
+                        context,
+                        'Alertness',
+                        driver.alertnessLevel.toUpperCase(),
+                        driver.alertnessLevel == 'high' ? '✓' : '!',
+                        driver.alertnessLevel == 'high' ? Colors.green : Colors.orange,
+                      ),
+                      _buildMoodMetric(
+                        context,
+                        'Fatigue',
+                        driver.fatigueLevel.toUpperCase(),
+                        driver.fatigueLevel == 'high' ? '⚠' : '✓',
+                        driver.fatigueLevel == 'high' ? Colors.red : Colors.green,
+                      ),
+                      _buildMoodMetric(
+                        context,
+                        'Status',
+                        driver.safetyStatus.toUpperCase(),
+                        driver.statusEmoji,
+                        statusColor,
+                      ),
+                    ],
+                  ),
+                  if (driver.needsBrakeWarning) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red, width: 2),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.warning, color: Colors.red, size: 24),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'FATIGUE DETECTED - BRAKE WARNING ACTIVE',
+                              style: TextStyle(
+                                color: Colors.red,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMoodMetric(BuildContext context, String label, String value, String indicator, Color color) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[600],
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: color, width: 2),
+          ),
+          child: Column(
+            children: [
+              Text(
+                indicator,
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildStreamControlCard(BuildContext context) {
     return Card(
       child: Padding(
@@ -293,7 +566,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                       const Text('Driver Detection'),
                     ],
                   ),
-                  subtitle: const Text('Monitor driver behavior and alertness'),
+                  subtitle: const Text('Detect person/objects (driver as person)'),
                   value: CameraModel.driver,
                   groupValue: _selectedCameraModel,
                   activeColor: Theme.of(context).primaryColor,
@@ -308,7 +581,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                   title: Row(
                     children: [
                       Icon(
-                        Icons.camera_front,
+                        Icons.mood,
                         color: _selectedCameraModel == CameraModel.front
                             ? Theme.of(context).primaryColor
                             : Colors.grey,
@@ -318,7 +591,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                       const Text('Front Detection'),
                     ],
                   ),
-                  subtitle: const Text('Road safety and object detection'),
+                  subtitle: const Text('Mood and emotion detection'),
                   value: CameraModel.front,
                   groupValue: _selectedCameraModel,
                   activeColor: Theme.of(context).primaryColor,
@@ -457,24 +730,23 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
     });
     _scrollSystemMessagesToBottom();
 
-    // Switch detection model via ROS service call or topic
+    // Switch detection model via ROS service
     _switchDetectionModel(model);
   }
 
-  void _switchDetectionModel(CameraModel model) {
-    // Publish mode switch command to ROS2 via detection service
+  void _switchDetectionModel(CameraModel model) async {
+    // Publish mode switch command to ROS2 via mode service
     try {
-      // This will be handled by the ROS service when we extend it
-      // For now, we'll simulate the mode switch
+      final detectionMode = model == CameraModel.driver ? DetectionMode.driver : DetectionMode.front;
+      await _modeService.switchMode(detectionMode);
+
       if (model == CameraModel.driver) {
         _switchToDriverDetection();
       } else {
         _switchToFrontDetection();
       }
 
-      // TODO: Add actual ROS2 topic publishing when detection service is extended
-      // Example: _rosService.publishModeCommand(model.name);
-
+      print('Mode switched to: ${model.name}');
     } catch (e) {
       setState(() {
         _systemMessages.add('Error switching detection model: $e');
@@ -484,21 +756,21 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   }
 
   void _switchToDriverDetection() {
-    // Subscribe to driver-specific detection results
-    // Topic: /driver_detections
     setState(() {
-      _systemMessages.add('Monitoring: Driver mood and behavior');
-      _systemMessages.add('Analyzing: Fatigue, alertness, emotions');
+      _systemMessages.add('✓ Driver Detection Mode Active');
+      _systemMessages.add('  → Monitoring: Person/object detection');
+      _systemMessages.add('  → Analyzing: Driver as person/object');
+      _systemMessages.add('  → Brake warning: If objects are too near');
     });
     _scrollSystemMessagesToBottom();
   }
 
   void _switchToFrontDetection() {
-    // Subscribe to front object detection results
-    // Topic: /object_detections (current)
     setState(() {
-      _systemMessages.add('Monitoring: Road objects and obstacles');
-      _systemMessages.add('Analyzing: Cars, pedestrians, traffic signs');
+      _systemMessages.add('✓ Front Detection Mode Active');
+      _systemMessages.add('  → Monitoring: Mood and emotions');
+      _systemMessages.add('  → Analyzing: Fatigue, alertness, emotions');
+      _systemMessages.add('  → Brake warning: If person is sleepy/fatigued');
     });
     _scrollSystemMessagesToBottom();
   }
@@ -638,56 +910,98 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
 
   Widget _buildBrakeWarningOverlay(BuildContext context) {
     final bool isCritical = _warningMessage.startsWith('🚨');
+    final bool isMoodWarning = _warningSource == 'mood';
+    final bool isPersonWarning = _warningSource == 'driver';
+
+    String alertType;
+    if (isMoodWarning) {
+      alertType = '🎭 MOOD ALERT';
+    } else if (isPersonWarning) {
+      alertType = '👤 PERSON ALERT';
+    } else {
+      alertType = '🛣️ ROAD ALERT';
+    }
 
     return Positioned.fill(
       child: Container(
         color: isCritical
-            ? Colors.red.withOpacity(0.9)
-            : Colors.orange.withOpacity(0.8),
+            ? Colors.red.withOpacity(0.95)
+            : Colors.orange.withOpacity(0.85),
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(32),
+                constraints: BoxConstraints(maxWidth: 600),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                     color: isCritical ? Colors.red : Colors.orange,
-                    width: 4,
+                    width: 6,
                   ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.3),
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                    ),
+                  ],
                 ),
                 child: Column(
                   children: [
                     Icon(
-                      isCritical ? Icons.warning : Icons.info,
-                      size: 64,
+                      isCritical ? Icons.warning_amber_rounded : Icons.info_outline,
+                      size: 80,
                       color: isCritical ? Colors.red : Colors.orange,
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: (isCritical ? Colors.red : Colors.orange).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        alertType,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: isCritical ? Colors.red : Colors.orange,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 16),
                     Text(
                       _warningMessage,
                       style: TextStyle(
-                        fontSize: 32,
+                        fontSize: isCritical ? 28 : 24,
                         fontWeight: FontWeight.bold,
                         color: isCritical ? Colors.red : Colors.orange,
                       ),
                       textAlign: TextAlign.center,
                     ),
                     if (isCritical) ...[
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: () {
-                          setState(() {
-                            _showBrakeWarning = false;
-                          });
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text('ACKNOWLEDGED', style: TextStyle(fontSize: 18)),
+                      const SizedBox(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              setState(() {
+                                _showBrakeWarning = false;
+                              });
+                            },
+                            icon: Icon(Icons.check_circle, size: 24),
+                            label: const Text('ACKNOWLEDGED', style: TextStyle(fontSize: 18)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ],

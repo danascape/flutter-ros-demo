@@ -188,4 +188,152 @@ class MessageConverter {
     }
     return SimpleDetection.fromString(message);
   }
+
+  static DriverDetection parseDriverDetectionMessage(String message) {
+    if (message.startsWith('DET_DRIVER:')) {
+      return DriverDetection.fromString(message.substring(11));
+    }
+    return DriverDetection.fromString(message);
+  }
+
+  static SafetyAlert parseSafetyAlertMessage(String message) {
+    if (message.startsWith('SAFETY_ALERT:')) {
+      return SafetyAlert.fromString(message.substring(13));
+    }
+    return SafetyAlert.fromString(message);
+  }
+}
+
+// Driver emotion/mood detection result
+class DriverDetection {
+  final String type;
+  final String dominantEmotion;
+  final double confidence;
+  final String alertnessLevel;
+  final String fatigueLevel;
+  final String safetyStatus;
+  final DateTime timestamp;
+
+  DriverDetection({
+    required this.type,
+    required this.dominantEmotion,
+    required this.confidence,
+    required this.alertnessLevel,
+    required this.fatigueLevel,
+    required this.safetyStatus,
+    required this.timestamp,
+  });
+
+  factory DriverDetection.fromString(String detectionString) {
+    // Format: type|emotion|confidence|alertness|fatigue|safety_status
+    final parts = detectionString.split('|');
+    if (parts.length >= 6) {
+      return DriverDetection(
+        type: parts[0],
+        dominantEmotion: parts[1],
+        confidence: double.tryParse(parts[2]) ?? 0.0,
+        alertnessLevel: parts[3],
+        fatigueLevel: parts[4],
+        safetyStatus: parts[5],
+        timestamp: DateTime.now(),
+      );
+    }
+    return DriverDetection(
+      type: 'unknown',
+      dominantEmotion: 'unknown',
+      confidence: 0.0,
+      alertnessLevel: 'unknown',
+      fatigueLevel: 'unknown',
+      safetyStatus: 'unknown',
+      timestamp: DateTime.now(),
+    );
+  }
+
+  bool get isCritical => safetyStatus == 'critical';
+  bool get isWarning => safetyStatus == 'warning' || safetyStatus == 'critical';
+  bool get isSleepy => fatigueLevel == 'high' || safetyStatus == 'critical';
+  bool get needsBrakeWarning => isSleepy || isCritical;
+
+  String get statusEmoji {
+    switch (safetyStatus) {
+      case 'critical':
+        return '🚨';
+      case 'warning':
+        return '⚠️';
+      case 'caution':
+        return '⚡';
+      case 'safe':
+        return '✅';
+      default:
+        return '❓';
+    }
+  }
+
+  String get emotionEmoji {
+    switch (dominantEmotion.toLowerCase()) {
+      case 'happy':
+        return '😊';
+      case 'sad':
+        return '😢';
+      case 'angry':
+        return '😠';
+      case 'surprise':
+        return '😲';
+      case 'fear':
+        return '😨';
+      case 'neutral':
+        return '😐';
+      case 'disgust':
+        return '🤢';
+      default:
+        return '😶';
+    }
+  }
+
+  @override
+  String toString() {
+    return '$type|$dominantEmotion|$confidence|$alertnessLevel|$fatigueLevel|$safetyStatus';
+  }
+}
+
+// Safety alert message
+class SafetyAlert {
+  final String level;
+  final String message;
+  final String recommendation;
+  final DateTime timestamp;
+
+  SafetyAlert({
+    required this.level,
+    required this.message,
+    required this.recommendation,
+    required this.timestamp,
+  });
+
+  factory SafetyAlert.fromString(String alertString) {
+    // Format: level|message|recommendation
+    final parts = alertString.split('|');
+    if (parts.length >= 3) {
+      return SafetyAlert(
+        level: parts[0],
+        message: parts[1],
+        recommendation: parts[2],
+        timestamp: DateTime.now(),
+      );
+    }
+    return SafetyAlert(
+      level: 'unknown',
+      message: 'Unknown alert',
+      recommendation: 'No recommendation',
+      timestamp: DateTime.now(),
+    );
+  }
+
+  bool get isCritical => level == 'critical';
+  bool get isWarning => level == 'warning' || level == 'critical';
+
+  @override
+  String toString() {
+    return '$level|$message|$recommendation';
+  }
 }
