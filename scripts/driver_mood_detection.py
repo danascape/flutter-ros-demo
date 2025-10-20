@@ -70,7 +70,7 @@ class DriverMoodDetectionNode(Node):
 
         # Driver monitoring parameters
         self.mood_history = []
-        self.max_history = 20
+        self.max_history = 10  # Reduced from 20 to prevent memory buildup
         self.detection_interval = 0.5  # Process every 500ms
         self.last_detection_time = time.time()
 
@@ -79,26 +79,27 @@ class DriverMoodDetectionNode(Node):
         self.alertness_threshold = 0.4
         self.emotion_confidence_threshold = 0.3
 
-        # Detection timer
-        self.detection_timer = self.create_timer(0.5, self.process_driver_detection)
+        # Detection timer (reduced frequency to prevent stream blocking)
+        self.detection_timer = self.create_timer(0.7, self.process_driver_detection)  # Increased from 0.5s to 0.7s
 
-        self.get_logger().info("Driver Mood Detection Node started")
+        self.get_logger().info("Mood Detection Node started")
         self.get_logger().info("Waiting for 'driver' mode activation...")
 
     def handle_mode_change(self, msg):
         """Handle detection mode changes from Flutter app"""
         try:
             mode_data = json.loads(msg.data)
-            new_mode = mode_data.get('mode', 'front')
+            new_mode = mode_data.get('mode', 'driver')
 
+            # Mood detection activates on DRIVER mode
             if new_mode == 'driver':
                 self.is_active = True
-                self.get_logger().info("🚗 Driver detection mode ACTIVATED")
-                self.publish_system_message("Driver monitoring activated")
+                self.get_logger().info("🎭 Mood detection mode ACTIVATED (Driver Detection)")
+                self.publish_system_message("Mood monitoring activated")
                 self.publish_system_message("Analyzing: emotions, fatigue, alertness")
             else:
                 self.is_active = False
-                self.get_logger().info("Driver detection mode DEACTIVATED")
+                self.get_logger().info("Mood detection mode DEACTIVATED")
 
         except json.JSONDecodeError:
             self.get_logger().warn(f"Invalid mode message: {msg.data}")
@@ -202,7 +203,7 @@ class DriverMoodDetectionNode(Node):
                 self.check_safety_alerts(driver_analysis)
 
         except Exception as e:
-            self.get_logger().error(f"Real emotion detection error: {e}")
+            # Reduced error logging
             self.detect_mock_emotions(frame)
 
     def detect_mock_emotions(self, frame):
@@ -327,18 +328,25 @@ class DriverMoodDetectionNode(Node):
     def check_safety_alerts(self, analysis):
         """Check for safety alerts and publish warnings"""
         safety_status = analysis['safety_status']
+        fatigue_level = analysis['fatigue']
+        alertness_level = analysis['alertness']
 
-        if safety_status == 'critical':
+        # CRITICAL: Issue brake warning for severe fatigue/sleepiness
+        if safety_status == 'critical' or fatigue_level == 'high':
             self.publish_safety_alert({
                 'level': 'critical',
-                'message': '🚨 CRITICAL: Driver appears severely fatigued or distracted!',
-                'recommendation': 'Pull over safely and take a break immediately'
+                'message': '🚨 BRAKE WARNING: Driver appears severely fatigued or sleepy!',
+                'recommendation': 'PULL OVER IMMEDIATELY and take a break'
             })
+            self.get_logger().error(
+                f"🚨 BRAKE WARNING ISSUED: Driver fatigue critical "
+                f"(Fatigue: {fatigue_level}, Alertness: {alertness_level})"
+            )
         elif safety_status == 'warning':
             self.publish_safety_alert({
                 'level': 'warning',
-                'message': '⚠️ WARNING: Signs of driver fatigue detected',
-                'recommendation': 'Consider taking a break soon'
+                'message': '⚠️ WARNING: Signs of driver fatigue/sleepiness detected',
+                'recommendation': 'Consider taking a break soon - driver may be getting sleepy'
             })
         elif safety_status == 'caution':
             self.publish_safety_alert({
@@ -363,14 +371,11 @@ class DriverMoodDetectionNode(Node):
         msg.data = f"DET_DRIVER:{formatted_data}"
         self.detection_publisher.publish(msg)
 
-        # Log important detections
-        if detection_data['safety_status'] in ['critical', 'warning']:
+        # Only log critical detections to reduce console spam
+        if detection_data['safety_status'] == 'critical':
             emotion = detection_data.get('dominant_emotion', 'unknown')
-            confidence = detection_data.get('confidence', 0)
             self.get_logger().warn(
-                f"DRIVER ALERT: {detection_data['safety_status'].upper()} - "
-                f"{emotion} ({confidence:.1%}), "
-                f"Fatigue: {detection_data['fatigue_level']}"
+                f"🚨 CRITICAL: {emotion}, Fatigue: {detection_data['fatigue_level']}"
             )
 
     def publish_safety_alert(self, alert_data):
@@ -379,7 +384,9 @@ class DriverMoodDetectionNode(Node):
         msg.data = f"SAFETY_ALERT:{alert_data['level']}|{alert_data['message']}|{alert_data['recommendation']}"
         self.detection_publisher.publish(msg)
 
-        self.get_logger().warn(f"SAFETY: {alert_data['message']}")
+        # Only log critical safety alerts
+        if alert_data['level'] == 'critical':
+            self.get_logger().warn(f"🚨 {alert_data['message']}")
 
     def publish_system_message(self, message):
         """Publish system message for UI"""

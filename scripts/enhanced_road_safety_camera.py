@@ -32,12 +32,12 @@ class EnhancedRoadSafetyCameraNode(Node):
             String, '/detection_mode', self.handle_mode_change, 10)
 
         # Detection mode state
-        self.current_mode = 'front'  # Default to front detection
+        self.current_mode = 'driver'  # Default to driver detection (mood monitoring)
         self.is_active = True  # Always active, but behavior changes based on mode
 
-        # Timers for different rates
-        self.image_timer = self.create_timer(0.1, self.capture_and_publish_image)  # 10 FPS
-        self.detection_timer = self.create_timer(0.2, self.detect_and_publish)     # 5 FPS detection
+        # Timers for different rates (reduced to prevent stream blocking)
+        self.image_timer = self.create_timer(0.15, self.capture_and_publish_image)  # ~6.5 FPS (reduced from 10)
+        self.detection_timer = self.create_timer(0.3, self.detect_and_publish)      # ~3.3 FPS (reduced from 5)
 
         # Camera setup
         self.cap = cv2.VideoCapture(0)
@@ -115,12 +115,13 @@ class EnhancedRoadSafetyCameraNode(Node):
 
                 self.get_logger().info(f"🔄 Camera mode switched: {old_mode} → {new_mode}")
 
+                # Front mode does road object detection
                 if new_mode == 'front':
-                    self.get_logger().info("🛣️  Front detection: monitoring road objects")
-                    self.publish_system_message("Front camera: Road safety monitoring active")
+                    self.get_logger().info("🛣️ Front detection: monitoring road objects and pedestrians")
+                    self.publish_system_message("Front Detection: Road object detection active")
                 elif new_mode == 'driver':
-                    self.get_logger().info("🚗 Driver mode: basic object detection (emotion detection handled by driver_mood_detection.py)")
-                    self.publish_system_message("Front camera: Driver assistance mode")
+                    self.get_logger().info("🎭 Driver mode: emotion/mood detection (handled by driver_mood_detection.py)")
+                    self.publish_system_message("Driver Detection: Mood detection active")
 
         except json.JSONDecodeError:
             self.get_logger().warn(f"Invalid mode message: {msg.data}")
@@ -154,8 +155,9 @@ class EnhancedRoadSafetyCameraNode(Node):
                 return
             frame = self.current_frame.copy()
 
+        # Front mode does road object/person detection
         if self.current_mode == 'front':
-            # Standard road object detection
+            # Person/object detection for road safety
             if self.yolo_available:
                 detections = self.detect_road_objects_yolo(frame)
             else:
@@ -166,15 +168,9 @@ class EnhancedRoadSafetyCameraNode(Node):
                 self.publish_road_detection(detection)
 
         elif self.current_mode == 'driver':
-            # Driver-focused detection (complement to mood detection)
-            if self.yolo_available:
-                detections = self.detect_driver_objects_yolo(frame)
-            else:
-                detections = self.detect_driver_objects_mock(frame)
-
-            # Process each detection
-            for detection in detections:
-                self.publish_driver_object_detection(detection)
+            # Driver mode - mood detection is handled by driver_mood_detection.py
+            # This camera just provides the stream
+            pass
 
     def detect_road_objects_yolo(self, frame):
         """Real YOLO object detection for road objects"""
@@ -342,24 +338,27 @@ class EnhancedRoadSafetyCameraNode(Node):
         return None
 
     def assess_road_danger(self, class_name, distance, confidence):
-        """Assess danger level for road objects"""
+        """Assess danger level for road objects with brake warning thresholds"""
         if distance is None:
             return 'unknown'
 
         # Different danger thresholds for different objects
+        # CRITICAL = BRAKE WARNING (object is very near)
         if class_name in ['car', 'truck', 'bus']:
-            if distance < 10:
+            if distance < 10:  # Less than 10 meters - BRAKE WARNING
+                self.get_logger().warn(f"🚨 BRAKE WARNING: {class_name} at {distance:.1f}m!")
                 return 'critical'
-            elif distance < 20:
+            elif distance < 20:  # 10-20 meters - warning zone
                 return 'warning'
-            elif distance < 40:
+            elif distance < 40:  # 20-40 meters - caution zone
                 return 'caution'
         elif class_name in ['person', 'bicycle', 'motorcycle']:
-            if distance < 8:
+            if distance < 8:  # Less than 8 meters - BRAKE WARNING for vulnerable road users
+                self.get_logger().warn(f"🚨 BRAKE WARNING: {class_name} at {distance:.1f}m!")
                 return 'critical'
-            elif distance < 15:
+            elif distance < 15:  # 8-15 meters - warning zone
                 return 'warning'
-            elif distance < 30:
+            elif distance < 30:  # 15-30 meters - caution zone
                 return 'caution'
         elif class_name in ['traffic light', 'stop sign']:
             if distance < 5:
@@ -370,7 +369,7 @@ class EnhancedRoadSafetyCameraNode(Node):
         return 'safe'
 
     def publish_road_detection(self, detection):
-        """Publish road object detection result"""
+        """Publish road object detection result with brake warnings"""
         # Enhanced format: DET:class|confidence|x,y,w,h|distance|danger_level
         bbox = detection['bbox']
         distance_str = f"{detection['distance']:.1f}m" if detection['distance'] else "unknown"
@@ -383,9 +382,11 @@ class EnhancedRoadSafetyCameraNode(Node):
         msg.data = f"DET:{detection_data}"
         self.detection_publisher.publish(msg)
 
-        # Log critical detections
+        # Only log critical detections to reduce console spam
         if detection['danger_level'] == 'critical':
-            self.get_logger().warn(f"CRITICAL: {detection['class']} at {distance_str}!")
+            self.get_logger().warn(f"🚨 BRAKE: {detection['class']} at {distance_str}")
+            # Publish additional safety alert for critical near objects
+            self.publish_brake_alert(detection['class'], distance_str)
 
     def publish_driver_object_detection(self, detection):
         """Publish driver-specific object detection"""
@@ -415,6 +416,13 @@ class EnhancedRoadSafetyCameraNode(Node):
         msg = String()
         msg.data = f"SYSTEM:{message}"
         self.detection_publisher.publish(msg)
+
+    def publish_brake_alert(self, object_class, distance):
+        """Publish brake alert for critical near objects"""
+        msg = String()
+        msg.data = f"BRAKE_ALERT:front|{object_class}|{distance}|Object too close - brake immediately!"
+        self.detection_publisher.publish(msg)
+        # Reduced logging
 
     def __del__(self):
         if hasattr(self, 'cap'):

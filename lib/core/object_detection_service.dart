@@ -66,12 +66,11 @@ class ObjectDetectionService {
 
   void _processDetectionMessage(StdMsgsString msg) {
     try {
-      print("Raw detection message received: '${msg.value}'");
+      // Reduce logging to prevent console spam
       final detection = MessageConverter.parseDetectionMessage(msg.value);
-      print("Parsed detection: ${detection.className} confidence=${detection.confidence}");
       _detectionStreamController.add(detection);
-      print("Detection added to stream");
     } catch (e) {
+      // Only log errors
       print("Error processing detection message: $e");
     }
   }
@@ -79,23 +78,20 @@ class ObjectDetectionService {
   void _processDriverDetectionMessage(StdMsgsString msg) {
     try {
       final messageValue = msg.value;
-      print("Raw driver detection message received: '$messageValue'");
 
       // Handle different message types from driver detection node
       if (messageValue.startsWith('DET_DRIVER:')) {
         final driverDetection = MessageConverter.parseDriverDetectionMessage(messageValue);
-        print("Parsed driver detection: ${driverDetection.dominantEmotion} (${driverDetection.safetyStatus})");
         _driverDetectionStreamController.add(driverDetection);
-        print("Driver detection added to stream");
       } else if (messageValue.startsWith('SAFETY_ALERT:')) {
         final safetyAlert = MessageConverter.parseSafetyAlertMessage(messageValue);
-        print("Parsed safety alert: ${safetyAlert.level} - ${safetyAlert.message}");
         _safetyAlertStreamController.add(safetyAlert);
-        print("Safety alert added to stream");
+        // Only log critical safety alerts
+        if (safetyAlert.isCritical) {
+          print("CRITICAL: ${safetyAlert.message}");
+        }
       } else if (messageValue.startsWith('SYSTEM:')) {
-        // System messages - can be logged or displayed
-        final systemMessage = messageValue.substring(7);
-        print("System message: $systemMessage");
+        // System messages - reduced logging
       }
     } catch (e) {
       print("Error processing driver detection message: $e");

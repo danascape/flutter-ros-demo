@@ -18,7 +18,7 @@ class DetectionModeController(Node):
             String, '/mode_command', self.handle_mode_command, 10)
 
         # Current state
-        self.current_mode = 'front'  # Default to front detection
+        self.current_mode = 'driver'  # Default to driver detection (mood monitoring)
         self.available_modes = ['driver', 'front']
 
         # Publish initial status
@@ -75,11 +75,13 @@ class DetectionModeController(Node):
             self.get_logger().info("   → Emotion detection")
             self.get_logger().info("   → Fatigue monitoring")
             self.get_logger().info("   → Alertness analysis")
+            self.get_logger().info("   → Brake warning if driver sleepy/fatigued")
         elif new_mode == 'front':
             self.get_logger().info("🛣️  Front detection mode activated")
             self.get_logger().info("   → Object detection")
             self.get_logger().info("   → Road safety monitoring")
             self.get_logger().info("   → Collision avoidance")
+            self.get_logger().info("   → Brake warning if objects too near")
 
     def publish_mode_status(self):
         """Publish current mode status"""

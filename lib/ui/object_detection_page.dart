@@ -66,14 +66,14 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
       _setupDriverDetectionListener();
       _setupSafetyAlertListener();
 
-      // Set initial mode to driver (person detection)
+      // Set initial mode to driver (mood detection)
       await _modeService.switchMode(DetectionMode.driver);
 
       if (mounted) {
         setState(() {
           _isConnected = true;
           _systemMessages.add("Camera and detection services initialized");
-          _systemMessages.add("Mode: Driver Detection - Person Detection (default)");
+          _systemMessages.add("Mode: Driver Detection - Mood Monitoring (default)");
         });
         _scrollSystemMessagesToBottom();
       }
@@ -90,10 +90,10 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   void _setupImageListener() {
     _imageSubscription = _cameraService.imageStream.listen((imageData) {
       if (mounted && imageData.hasImageData) {
-        // Throttle frame updates to reduce blinking
+        // Throttle frame updates more aggressively to prevent memory buildup
         final now = DateTime.now();
-        if (now.difference(_lastFrameTime).inMilliseconds < 100) {
-          return; // Skip frame if too soon
+        if (now.difference(_lastFrameTime).inMilliseconds < 150) {
+          return; // Skip frame if too soon (increased from 100ms to 150ms)
         }
         _lastFrameTime = now;
 
@@ -105,12 +105,14 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
           _frameCounter++;
 
           setState(() {
+            // Clear previous image to free memory
+            _previousMemoryImage?.evict();
             _previousMemoryImage = _currentMemoryImage;
             _currentMemoryImage = newMemoryImage;
             _currentImageData = imageData;
           });
         } catch (e) {
-          print('Error processing image: $e');
+          // Only log errors, not all frames
         }
       }
     });
@@ -118,7 +120,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
 
   void _setupDetectionListener() {
     _detectionSubscription = _detectionService.detectionStream.listen((result) {
-      print("UI received detection result: ${result.className}");
+      // Reduce console logging
       if (mounted) {
         setState(() {
           _detectionResults.add(DetectionUtils.formatDetectionResult(result));
@@ -126,11 +128,12 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
           // Check for brake warning conditions (front detection)
           _checkBrakeWarning(result);
 
-          if (_detectionResults.length > 50) {
-            _detectionResults.removeAt(0);
+          // Reduce history size to prevent memory buildup
+          if (_detectionResults.length > 30) {
+            _detectionResults.removeRange(0, _detectionResults.length - 30);
           }
-          if (_systemMessages.length > 20) {
-            _systemMessages.removeAt(0);
+          if (_systemMessages.length > 15) {
+            _systemMessages.removeRange(0, _systemMessages.length - 15);
           }
         });
         _scrollDetectionToBottom();
@@ -141,7 +144,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
 
   void _setupDriverDetectionListener() {
     _driverDetectionSubscription = _detectionService.driverDetectionStream.listen((driverDetection) {
-      print("UI received driver detection: ${driverDetection.dominantEmotion} (${driverDetection.safetyStatus})");
+      // Reduce console logging
       if (mounted) {
         setState(() {
           _currentDriverMood = driverDetection;
@@ -156,11 +159,12 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
             '${driverDetection.statusEmoji} ${driverDetection.safetyStatus}'
           );
 
-          // Check for brake warning if driver is sleepy/fatigued
+          // Check for brake warning if person is sleepy/fatigued
           _checkDriverBrakeWarning(driverDetection);
 
-          if (_detectionResults.length > 50) {
-            _detectionResults.removeAt(0);
+          // Reduce history size to prevent memory buildup
+          if (_detectionResults.length > 30) {
+            _detectionResults.removeRange(0, _detectionResults.length - 30);
           }
         });
         _scrollDetectionToBottom();
@@ -170,7 +174,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
 
   void _setupSafetyAlertListener() {
     _safetyAlertSubscription = _detectionService.safetyAlertStream.listen((alert) {
-      print("UI received safety alert: ${alert.level} - ${alert.message}");
+      // Reduce console logging
       if (mounted) {
         setState(() {
           _systemMessages.add('${alert.level.toUpperCase()}: ${alert.message}');
@@ -179,7 +183,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
           if (alert.isCritical) {
             _showBrakeWarning = true;
             _warningMessage = alert.message;
-            _warningSource = 'driver';
+            _warningSource = 'mood';
 
             // Auto-hide warning after 5 seconds for safety alerts
             Future.delayed(Duration(seconds: 5), () {
@@ -191,8 +195,9 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
             });
           }
 
-          if (_systemMessages.length > 20) {
-            _systemMessages.removeAt(0);
+          // Reduce history size to prevent memory buildup
+          if (_systemMessages.length > 15) {
+            _systemMessages.removeRange(0, _systemMessages.length - 15);
           }
         });
         _scrollSystemMessagesToBottom();
@@ -259,15 +264,29 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
 
   @override
   void dispose() {
+    // Cancel subscriptions
     _imageSubscription.cancel();
     _detectionSubscription.cancel();
     _driverDetectionSubscription.cancel();
     _safetyAlertSubscription.cancel();
+
+    // Dispose controllers
     _detectionScrollController.dispose();
     _systemMessagesScrollController.dispose();
+
+    // Clear image memory
+    _currentMemoryImage?.evict();
+    _previousMemoryImage?.evict();
+
+    // Clear lists to free memory
+    _detectionResults.clear();
+    _systemMessages.clear();
+
+    // Dispose services
     _cameraService.dispose();
     _detectionService.dispose();
     _modeService.dispose();
+
     super.dispose();
   }
 
@@ -308,10 +327,10 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                           children: [
                             _buildStreamControlCard(context),
                             const SizedBox(height: 16),
-                            // Driver mood display (only show when in FRONT mode - swapped)
-                            if (_selectedCameraModel == CameraModel.front)
+                            // Driver mood display (only show when in DRIVER mode)
+                            if (_selectedCameraModel == CameraModel.driver)
                               _buildDriverMoodCard(context),
-                            if (_selectedCameraModel == CameraModel.front)
+                            if (_selectedCameraModel == CameraModel.driver)
                               const SizedBox(height: 16),
                             Expanded(
                               child: Row(
@@ -407,7 +426,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                 Icon(Icons.person, color: statusColor, size: 24),
                 const SizedBox(width: 8),
                 Text(
-                  'Mood Monitor (Front Detection)',
+                  'Driver Mood Monitor',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -556,7 +575,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                   title: Row(
                     children: [
                       Icon(
-                        Icons.person,
+                        Icons.mood,
                         color: _selectedCameraModel == CameraModel.driver
                             ? Theme.of(context).primaryColor
                             : Colors.grey,
@@ -566,7 +585,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                       const Text('Driver Detection'),
                     ],
                   ),
-                  subtitle: const Text('Detect person/objects (driver as person)'),
+                  subtitle: const Text('Monitor driver mood, fatigue, and alertness'),
                   value: CameraModel.driver,
                   groupValue: _selectedCameraModel,
                   activeColor: Theme.of(context).primaryColor,
@@ -581,7 +600,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                   title: Row(
                     children: [
                       Icon(
-                        Icons.mood,
+                        Icons.directions_car,
                         color: _selectedCameraModel == CameraModel.front
                             ? Theme.of(context).primaryColor
                             : Colors.grey,
@@ -591,7 +610,7 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
                       const Text('Front Detection'),
                     ],
                   ),
-                  subtitle: const Text('Mood and emotion detection'),
+                  subtitle: const Text('Detect road objects and pedestrians'),
                   value: CameraModel.front,
                   groupValue: _selectedCameraModel,
                   activeColor: Theme.of(context).primaryColor,
@@ -758,9 +777,9 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   void _switchToDriverDetection() {
     setState(() {
       _systemMessages.add('✓ Driver Detection Mode Active');
-      _systemMessages.add('  → Monitoring: Person/object detection');
-      _systemMessages.add('  → Analyzing: Driver as person/object');
-      _systemMessages.add('  → Brake warning: If objects are too near');
+      _systemMessages.add('  → Monitoring: Driver mood and emotions');
+      _systemMessages.add('  → Analyzing: Fatigue, alertness, emotions');
+      _systemMessages.add('  → Brake warning: If driver is sleepy/fatigued');
     });
     _scrollSystemMessagesToBottom();
   }
@@ -768,9 +787,9 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
   void _switchToFrontDetection() {
     setState(() {
       _systemMessages.add('✓ Front Detection Mode Active');
-      _systemMessages.add('  → Monitoring: Mood and emotions');
-      _systemMessages.add('  → Analyzing: Fatigue, alertness, emotions');
-      _systemMessages.add('  → Brake warning: If person is sleepy/fatigued');
+      _systemMessages.add('  → Monitoring: Road objects and pedestrians');
+      _systemMessages.add('  → Analyzing: Distance and collision risk');
+      _systemMessages.add('  → Brake warning: If objects are too near');
     });
     _scrollSystemMessagesToBottom();
   }
